@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MTS LinkChats (Launcher)
+Icon=mts-linkchats-launcher
+TryExec=mts-linkchats-launcher
+Exec=mts-linkchats-launcher %U
+Terminal=false
+MimeType=x-scheme-handler/wbnr;
+Categories=Office;VideoConference;
+StartupWMClass=mts-linkchats

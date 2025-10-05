@@ -26,7 +26,7 @@ pub struct Args {
     pub no_exec: bool,
     /// The timeout to use for http connections and requests
     #[arg(long)]
-    pub timeout: Option<u64>,
+    pub timeout: Option<usize>,
     /// How often to try to resume the download until giving up (0 for unlimited)
     #[arg(long)]
     pub download_attempts: Option<usize>,

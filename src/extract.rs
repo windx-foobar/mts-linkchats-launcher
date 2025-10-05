@@ -1,6 +1,5 @@
-use crate::args::Args;
+use crate::config::Config;
 use crate::errors::*;
-use crate::paths::Paths;
 use libflate::gzip::Decoder;
 use std::io::Read;
 use std::path::Path;
@@ -39,14 +38,12 @@ async fn atomic_swap_with_fallback(src: &Path, target: &Path) -> Result<AtomicSw
     }
 }
 
-async fn extract_data<R: Read>(
-    mut tar: tar::Archive<R>,
-    args: &Args,
-    install_path: &Path,
-    paths: &Paths,
-) -> Result<()> {
-    let new_install_path = args.install_dir.as_ref().unwrap_or(&paths.new_install);
-    let tmp = tempfile::tempdir_in(&paths.cache).context("Failed to create temporary directory")?;
+pub async fn pkg<R: Read>(tar: R, config: &Config) -> Result<()> {
+    let decoder = Decoder::new(tar)?;
+    let mut tar = tar::Archive::new(decoder);
+    let new_install_path = &config.new_intsall_path;
+    let tmp =
+        tempfile::tempdir_in(&config.cache_path).context("Failed to create temporary directory")?;
     let prepare_path = tmp.path();
 
     info!("Extracting to {:?}...", prepare_path);
@@ -71,20 +68,14 @@ async fn extract_data<R: Read>(
         bail!("Failed get first entry in prepare directory");
     }
 
-    if install_path != new_install_path
+    if config.install_path != *new_install_path
         && let AtomicSwapFallback::Atomic =
-            atomic_swap_with_fallback(new_install_path, install_path).await?
+            atomic_swap_with_fallback(new_install_path, &config.install_path).await?
     {
         debug!("Removing old directory...");
-        if let Err(err) = fs::remove_dir_all(&new_install_path).await {
+        if let Err(err) = fs::remove_dir_all(new_install_path).await {
             warn!("Failed to delete old directory: {:#}", err);
         }
     }
     Ok(())
-}
-
-pub async fn pkg<R: Read>(tar: R, args: &Args, install_path: &Path, paths: &Paths) -> Result<()> {
-    let decoder = Decoder::new(tar)?;
-    let tar = tar::Archive::new(decoder);
-    extract_data(tar, args, install_path, paths).await
 }

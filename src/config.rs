@@ -1,154 +1,130 @@
+use crate::args::Args;
 use crate::errors::*;
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
-use toml::Value;
+use crate::paths::Paths;
+use file::ConfigFile;
+use std::path::PathBuf;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct ConfigFile {
-    #[serde(default)]
-    pub mts_linkchats: MtsLinkchatsConfig,
-    #[serde(default)]
-    pub launcher: LauncherConfig,
-}
+mod file;
 
-impl ConfigFile {
-    pub fn parse(s: &str) -> Result<ConfigFile> {
-        let c_default = Self::default();
-        let c_raw = toml::from_str::<Value>(s)?;
-
-        let c_raw_launcher = c_raw.get("launcher");
-        let check_update = c_raw_launcher
-            .and_then(|value| value.get("check_update"))
-            .and_then(|value| value.as_bool());
-        let update_check_interval: Option<usize> = c_raw_launcher
-            .and_then(|value| value.get("check_update_interval"))
-            .and_then(|value| value.as_integer())
-            .and_then(|value| value.try_into().ok());
-
-        let mut c: Self = c_raw.try_into()?;
-
-        if check_update.is_none() {
-            c.launcher.check_update = c_default.launcher.check_update;
-        }
-
-        if update_check_interval.is_none() {
-            c.launcher.check_update_interval = c_default.launcher.check_update_interval;
-        }
-
-        Ok(c)
-    }
-
-    pub fn load_from(path: &Path) -> Result<ConfigFile> {
-        info!("Loading configuration file at {:?}", path);
-        let buf = fs::read_to_string(path)
-            .with_context(|| anyhow!("Failed to read config file at {:?}", path))?;
-        Self::parse(&buf)
-    }
-
-    pub fn locate_file() -> Result<Option<PathBuf>> {
-        for path in [dirs::config_dir(), Some(PathBuf::from("/etc/"))]
-            .into_iter()
-            .flatten()
-        {
-            let path = path.join("mts-linkchats.conf");
-            debug!("Searching for configuration file at {:?}", path);
-            if path.exists() {
-                debug!("Found configuration file at {:?}", path);
-                return Ok(Some(path));
-            }
-        }
-        Ok(None)
-    }
-
-    pub fn load() -> Result<ConfigFile> {
-        if let Some(path) = Self::locate_file()? {
-            Self::load_from(&path)
-        } else {
-            info!("No configuration file found, using default config");
-            Ok(Self::default())
-        }
-    }
-}
-
-impl Default for ConfigFile {
-    fn default() -> Self {
-        Self {
-            mts_linkchats: Default::default(),
-            launcher: LauncherConfig {
-                check_update: true,
-                check_update_interval: 3600 * 24,
-                ..Default::default()
-            },
-        }
-    }
-}
-
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct MtsLinkchatsConfig {
-    #[serde(default)]
-    pub extra_arguments: Vec<String>,
-    #[serde(default)]
-    pub extra_env_vars: Vec<String>,
-}
-
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct LauncherConfig {
-    #[serde(default)]
+#[derive(Debug)]
+pub struct Config {
+    pub install_path: PathBuf,
+    pub new_intsall_path: PathBuf,
+    pub state_path: PathBuf,
+    pub cache_path: PathBuf,
+    pub download_attempts: usize,
     pub check_update: bool,
-    #[serde(default)]
+    pub force_check_update: bool,
     pub check_update_interval: usize,
-    pub download_attempts: Option<usize>,
+    pub extra_arguments: Vec<String>,
+    pub tar_path: Option<PathBuf>,
+    pub timeout: Option<usize>,
+}
+
+#[derive(Debug)]
+pub struct ConfigBuilder<'a> {
+    args: &'a Args,
+    cf: Option<&'a ConfigFile>,
+}
+
+impl<'a> ConfigBuilder<'a> {
+    pub fn new(args: &'a Args) -> Self {
+        Self { args, cf: None }
+    }
+
+    pub fn config_file(&mut self, cf: &'a ConfigFile) -> &mut Self {
+        self.cf = Some(cf);
+        self
+    }
+
+    pub fn build(&self) -> Result<Config> {
+        let cf = match self.cf {
+            Some(cf) => cf,
+            None => &ConfigFile::load().context("Failed load config file")?,
+        };
+
+        Config::new(self.args, cf)
+    }
+}
+
+impl Config {
+    pub fn builder<'a>(args: &'a Args) -> ConfigBuilder<'a> {
+        ConfigBuilder::new(args)
+    }
+
+    pub fn new(args: &Args, cf: &ConfigFile) -> Result<Self> {
+        let paths = Paths::new()?;
+
+        Ok(Self {
+            install_path: args.install_dir.clone().unwrap_or(paths.install),
+            new_intsall_path: args.install_dir.clone().unwrap_or(paths.new_install),
+            state_path: paths.state,
+            cache_path: paths.cache,
+            download_attempts: args
+                .download_attempts
+                .or(cf.launcher.download_attempts)
+                .unwrap_or(5),
+            check_update: if args.check_update {
+                args.check_update
+            } else {
+                cf.launcher.check_update
+            },
+            force_check_update: args.tar.is_some(),
+            check_update_interval: args
+                .check_update_interval
+                .unwrap_or(cf.launcher.check_update_interval),
+            extra_arguments: cf.mts_linkchats.extra_arguments.clone(),
+            tar_path: args.tar.clone(),
+            timeout: args.timeout,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_empty_config() -> Result<()> {
-        let cf = ConfigFile::parse("")?;
-        assert_eq!(cf, ConfigFile::default());
-        Ok(())
+    fn get_default_args() -> Args {
+        Args {
+            check_update: false,
+            timeout: None,
+            tar: None,
+            install_dir: None,
+            check_update_interval: None,
+            download_attempts: None,
+            verbose: 0,
+            print_tar_url: false,
+            no_exec: true,
+        }
     }
 
     #[test]
-    fn test_empty_mts_linkchats_config() -> Result<()> {
-        let cf = ConfigFile::parse("[mts-linkchats]")?;
-        assert_eq!(cf, ConfigFile::default());
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_launcher_config() -> Result<()> {
-        let cf = ConfigFile::parse("[launcher]")?;
-        assert_eq!(cf, ConfigFile::default());
-        Ok(())
-    }
-
-    #[test]
-    fn test_check_update_and_check_update_interval_confg() -> Result<()> {
+    fn check_overrided_args_over_config_file() -> Result<()> {
+        let args = Args {
+            check_update: true,
+            install_dir: Some(dirs::data_dir().unwrap().join(".test")),
+            download_attempts: Some(1),
+            tar: Some(dirs::cache_dir().unwrap().join(".test.tar.gz")),
+            ..get_default_args()
+        };
         let cf = ConfigFile::parse(
             r#"
 [launcher]
 check_update = false
-check_update_interval = 0
+download_attempts = 2
         "#,
         )?;
-        assert!(!cf.launcher.check_update);
-        assert_eq!(cf.launcher.check_update_interval, 0);
-        Ok(())
-    }
+        let config = Config::builder(&args).config_file(&cf).build()?;
 
-    #[test]
-    fn test_check_update_interval_negative_config() -> Result<()> {
-        let cf = ConfigFile::parse(
-            r#"
-[launcher]
-check_update_interval = -1
-        "#,
-        );
-        assert!(cf.is_err());
+        assert!(!cf.launcher.check_update);
+        assert_eq!(cf.launcher.download_attempts, Some(2));
+
+        assert_eq!(config.check_update, args.check_update);
+        assert_eq!(config.download_attempts, args.download_attempts.unwrap());
+        assert_eq!(config.install_path, *args.install_dir.as_ref().unwrap());
+        assert_eq!(config.new_intsall_path, *args.install_dir.as_ref().unwrap());
+        assert!(config.force_check_update);
+
         Ok(())
     }
 }

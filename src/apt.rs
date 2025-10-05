@@ -3,8 +3,6 @@ use crate::http;
 use crate::pkg;
 use crate::progress::ProgressBar;
 
-pub const DEFAULT_DOWNLOAD_ATTEMPTS: usize = 5;
-
 pub struct Client {
     client: http::Client,
 }

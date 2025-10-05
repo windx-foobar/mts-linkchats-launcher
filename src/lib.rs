@@ -7,4 +7,5 @@ pub mod http;
 pub mod paths;
 pub mod pkg;
 pub mod progress;
+pub mod state;
 pub mod ui;

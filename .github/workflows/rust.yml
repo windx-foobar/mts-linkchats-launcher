@@ -2,11 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
-  schedule:
-    - cron: "0 9 * * 1"
+    branches: [master]
+  # schedule:
+  #   - cron: "0 9 * * 1"
 
 env:
   CARGO_TERM_COLOR: always

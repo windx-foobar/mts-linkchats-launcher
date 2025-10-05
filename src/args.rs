@@ -12,11 +12,12 @@ pub struct Args {
     /// Verbose logs (can be used multiple times)
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
-    ///// Uri to pass to the mts-linkchats child process
-    //pub uri: Option<String>,
-    /// Always check for updates when starting
+    /// Should check update when starting
     #[arg(long)]
     pub check_update: bool,
+    /// How often do you need to check for updates
+    #[arg(long)]
+    pub check_update_interval: Option<usize>,
     /// Check for the latest .tar.gz and print its url
     #[arg(long)]
     pub print_tar_url: bool,

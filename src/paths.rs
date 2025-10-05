@@ -4,24 +4,26 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
 
-pub fn mts_linkchats_launcher_path() -> Result<PathBuf> {
-    let path = dirs::data_dir().context("Failed to detect data directory")?;
-    Ok(path.join("spotify-launcher"))
+#[derive(Debug)]
+pub struct Paths {
+    pub install: PathBuf,
+    pub new_install: PathBuf,
+    pub state: PathBuf,
+    pub cache: PathBuf,
 }
 
-pub fn install_path() -> Result<PathBuf> {
-    let path = mts_linkchats_launcher_path()?;
-    Ok(path.join("install"))
-}
+impl Paths {
+    pub fn new() -> Result<Self> {
+        let data_dir = dirs::data_dir().context("Failed to detect data directory")?;
+        let cache_dir = dirs::cache_dir().context("Failed to detect cache directory")?;
 
-pub fn new_install_path() -> Result<PathBuf> {
-    let path = mts_linkchats_launcher_path()?;
-    Ok(path.join("install-new"))
-}
-
-pub fn state_file_path() -> Result<PathBuf> {
-    let path = mts_linkchats_launcher_path()?;
-    Ok(path.join("state.json"))
+        Ok(Self {
+            install: data_dir.join("install"),
+            new_install: data_dir.join("install-new"),
+            state: data_dir.join("state.toml"),
+            cache: cache_dir,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,17 +32,17 @@ pub struct State {
     pub last_update_check: SystemTime,
 }
 
-pub async fn load_state_file() -> Result<Option<State>> {
-    let state_file_path = state_file_path()?;
+pub async fn load_state_file(paths: &Paths) -> Result<Option<State>> {
+    let state_file_path = paths.state.as_path();
     if fs::metadata(&state_file_path).await.is_ok() {
         debug!("Reading state file from {:?}...", state_file_path);
         let buf = fs::read(&state_file_path).await.with_context(|| {
             anyhow!(
-                "Failed to read spotify-launcher state file at {:?}",
+                "Failed to read mts-linkchats-launcher state file at {:?}",
                 state_file_path
             )
         })?;
-        let state = serde_json::from_slice::<State>(&buf);
+        let state = toml::from_slice::<State>(&buf);
         debug!("Loaded state: {:?}", state);
         Ok(state.ok())
     } else {

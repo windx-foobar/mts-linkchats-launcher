@@ -6,26 +6,25 @@ use mts_linkchats_launcher::args::Args;
 use mts_linkchats_launcher::config::ConfigFile;
 use mts_linkchats_launcher::errors::*;
 use mts_linkchats_launcher::extract;
-use mts_linkchats_launcher::paths;
+use mts_linkchats_launcher::paths::{self, Paths, State};
+use mts_linkchats_launcher::pkg;
 use mts_linkchats_launcher::ui;
-use std::ffi::CString;
 use std::path::Path;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::fs;
+use tokio::process::Command;
 
-const UPDATE_CHECK_INTERVAL: u64 = 3600 * 24;
-const KEYRING_DEFAULT_PATH: &str = "/usr/share/spotify-launcher/keyring.pgp";
+async fn should_update(args: &Args, cf: &ConfigFile, state: Option<&State>) -> Result<bool> {
+    if !args.check_update && !cf.launcher.check_update {
+        return Ok(false);
+    }
 
-struct VersionCheck {
-    deb: Option<Vec<u8>>,
-    version: String,
-}
+    if args.tar.is_some() {
+        return Ok(true);
+    }
 
-async fn should_update(args: &Args, cf: &ConfigFile, state: Option<&paths::State>) -> Result<bool> {
-    if args.check_update || args.tar.is_some() || cf.launcher.check_update {
-        Ok(true)
-    } else if let Some(state) = &state {
+    if let Some(state) = &state {
         let Ok(since_update) = SystemTime::now().duration_since(state.last_update_check) else {
             // if the last update time is somehow in the future, check for updates now
             return Ok(true);
@@ -39,79 +38,73 @@ async fn should_update(args: &Args, cf: &ConfigFile, state: Option<&paths::State
             "Last update check was {} days and {} hours ago",
             days_since, hours_since
         );
-        Ok(since_update >= Duration::from_secs(UPDATE_CHECK_INTERVAL))
+        let interval: u64 = args
+            .check_update_interval
+            .unwrap_or(cf.launcher.check_update_interval)
+            .try_into()?;
+        Ok(since_update >= Duration::from_secs(interval))
     } else {
         Ok(true)
     }
 }
 
-async fn print_tar_url(args: &Args) -> Result<()> {
-    let client = Client::new(args.timeout)?;
-    let pkg = client.fetch_pkg_release().await?;
-    println!("{}", pkg.download_url());
-    Ok(())
+fn print_tar_url() {
+    println!("{}", pkg::DOWNLOAD_URL);
 }
 
 async fn update(
     args: &Args,
-    state: Option<&paths::State>,
+    state: Option<&State>,
     install_path: &Path,
     download_attempts: usize,
+    paths: &Paths,
 ) -> Result<()> {
-    let update = if let Some(tar_path) = &args.tar {
-        let deb = fs::read(tar_path)
+    let tar = if let Some(tar_path) = &args.tar {
+        fs::read(tar_path)
             .await
-            .with_context(|| anyhow!("Failed to read .deb file from {:?}", tar_path))?;
-        VersionCheck {
-            deb: Some(deb),
-            version: "0".to_string(),
-        }
+            .with_context(|| anyhow!("Failed to read .tar.gz file from {:?}", tar_path))?
     } else {
-        let client = Client::new(args.timeout)?;
-        let pkg = client.fetch_pkg_release().await?;
-
-        match state {
-            Some(state) if state.version == pkg.version => {
-                info!("Latest version is already installed, not updating");
-                VersionCheck {
-                    deb: None,
-                    version: pkg.version,
-                }
-            }
-            _ => {
-                let deb = client.download_pkg(&pkg, download_attempts).await?;
-                VersionCheck {
-                    deb: Some(deb),
-                    version: pkg.version,
-                }
-            }
-        }
+        Client::new(args.timeout)?
+            .download_tar(download_attempts)
+            .await?
     };
 
-    if let Some(deb) = update.deb {
-        extract::pkg(&deb[..], args, install_path).await?;
+    let version = pkg::parse_version(tar.as_slice())?;
+    match state {
+        Some(state) if state.version == version => {
+            if args.tar.is_some() {
+                info!(
+                    "Latest version is already installed, but --tar options is passed. Force update..."
+                );
+                extract::pkg(tar.as_slice(), args, install_path, paths).await?;
+            } else {
+                info!("Latest version is already installed, skip...");
+            }
+        }
+        _ => {
+            extract::pkg(tar.as_slice(), args, install_path, paths).await?;
+        }
     }
 
     debug!("Updating state file");
-    let buf = serde_json::to_string(&paths::State {
+    let buf = toml::to_string(&paths::State {
         last_update_check: SystemTime::now(),
-        version: update.version,
+        version,
     })?;
-    fs::write(paths::state_file_path()?, buf)
+    fs::write(&paths.state, buf)
         .await
         .context("Failed to write state file")?;
 
     Ok(())
 }
 
-fn start(args: &Args, cf: &ConfigFile, install_path: &Path) -> Result<()> {
-    let bin = install_path.join("usr/bin/mts-linkchats");
-    let bin = CString::new(bin.to_string_lossy().as_bytes())?;
+async fn start(args: &Args, cf: &ConfigFile, install_path: &Path) -> Result<()> {
+    let bin = install_path.join("linkchats");
 
-    let mut exec_args = vec![CString::new("mts-linkchats")?];
+    let mut exec_args = vec![];
 
-    for arg in cf.spotify.extra_arguments.iter().cloned() {
-        exec_args.push(CString::new(arg)?);
+    for arg in cf.mts_linkchats.extra_arguments.iter().cloned() {
+        exec_args.push(arg);
     }
 
     debug!("Assembled command: {:?}", exec_args);
@@ -119,15 +112,16 @@ fn start(args: &Args, cf: &ConfigFile, install_path: &Path) -> Result<()> {
     if args.no_exec {
         info!("Skipping exec because --no-exec was used");
     } else {
-        // cf.spotify.extra_env_vars.iter().for_each(|x| {
-        //     let (k, v) = match x.split_once('=') {
-        //         None => (x.as_str(), ""),
-        //         Some(x) => x,
-        //     };
-        //     std::env::set_var(k, v);
-        // });
-        nix::unistd::execv(&bin, &exec_args)
-            .with_context(|| anyhow!("Failed to exec {:?}", bin))?;
+        let mut child = Command::new(bin)
+            .args(exec_args)
+            .spawn()
+            .with_context(|| anyhow!("Failed spawn `linkchats`"))?;
+
+        let status_code = child
+            .wait()
+            .await
+            .with_context(|| anyhow!("Failed wait `linkchats`"))?;
+        debug!("`linkchats` is exited with code {status_code:?}");
     }
 
     Ok(())
@@ -145,27 +139,34 @@ async fn main() -> Result<()> {
     };
     env_logger::init_from_env(Env::default().default_filter_or(log_level));
 
+    let paths = Paths::new()?;
     let cf = ConfigFile::load().context("Failed to load configuration")?;
 
     let install_path = if let Some(path) = &args.install_dir {
-        path.clone()
+        path.as_path()
     } else {
-        paths::install_path()?
+        paths.install.as_path()
     };
     debug!("Using install path: {:?}", install_path);
 
-    let download_attempts = args.download_attempts.unwrap_or_else(|| {
-        cf.spotify
-            .download_attempts
-            .unwrap_or(apt::DEFAULT_DOWNLOAD_ATTEMPTS)
-    });
+    let download_attempts = args
+        .download_attempts
+        .or(cf.launcher.download_attempts)
+        .unwrap_or(apt::DEFAULT_DOWNLOAD_ATTEMPTS);
 
     if args.print_tar_url {
-        print_tar_url(&args).await?;
+        print_tar_url();
     } else {
-        let state = paths::load_state_file().await?;
+        let state = paths::load_state_file(&paths).await?;
         if should_update(&args, &cf, state.as_ref()).await? {
-            if let Err(err) = update(&args, state.as_ref(), &install_path, download_attempts).await
+            if let Err(err) = update(
+                &args,
+                state.as_ref(),
+                install_path,
+                download_attempts,
+                &paths,
+            )
+            .await
             {
                 error!("Update failed: {err:#}");
                 ui::error(&err).await?;
@@ -173,7 +174,7 @@ async fn main() -> Result<()> {
         } else {
             info!("No update needed");
         }
-        start(&args, &cf, &install_path)?;
+        start(&args, &cf, install_path).await?;
     }
 
     Ok(())

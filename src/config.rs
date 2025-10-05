@@ -2,30 +2,38 @@ use crate::errors::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use toml::Value;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConfigFile {
     #[serde(default)]
-    pub spotify: SpotifyConfig,
+    pub mts_linkchats: MtsLinkchatsConfig,
     #[serde(default)]
     pub launcher: LauncherConfig,
 }
 
 impl ConfigFile {
     pub fn parse(s: &str) -> Result<ConfigFile> {
-        let mut c = toml::from_str::<ConfigFile>(s)?;
+        let c_default = Self::default();
+        let c_raw = toml::from_str::<Value>(s)?;
 
-        if c.launcher.force_update {
-            c.launcher.skip_update = false;
-            c.launcher.check_update = true;
-        } else {
-            c.launcher.check_update = !c.launcher.skip_update;
+        let c_raw_launcher = c_raw.get("launcher");
+        let check_update = c_raw_launcher
+            .and_then(|value| value.get("check_update"))
+            .and_then(|value| value.as_bool());
+        let update_check_interval: Option<usize> = c_raw_launcher
+            .and_then(|value| value.get("check_update_interval"))
+            .and_then(|value| value.as_integer())
+            .and_then(|value| value.try_into().ok());
+
+        let mut c: Self = c_raw.try_into()?;
+
+        if check_update.is_none() {
+            c.launcher.check_update = c_default.launcher.check_update;
         }
 
-        if let Some(keyring) = &c.launcher.keyring {
-            if !keyring.exists() {
-                c.launcher.keyring = None;
-            }
+        if update_check_interval.is_none() {
+            c.launcher.check_update_interval = c_default.launcher.check_update_interval;
         }
 
         Ok(c)
@@ -43,7 +51,7 @@ impl ConfigFile {
             .into_iter()
             .flatten()
         {
-            let path = path.join("spotify-launcher.conf");
+            let path = path.join("mts-linkchats.conf");
             debug!("Searching for configuration file at {:?}", path);
             if path.exists() {
                 debug!("Found configuration file at {:?}", path);
@@ -66,34 +74,31 @@ impl ConfigFile {
 impl Default for ConfigFile {
     fn default() -> Self {
         Self {
-            spotify: SpotifyConfig::default(),
+            mts_linkchats: Default::default(),
             launcher: LauncherConfig {
                 check_update: true,
-                ..LauncherConfig::default()
+                check_update_interval: 3600 * 24,
+                ..Default::default()
             },
         }
     }
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct SpotifyConfig {
+pub struct MtsLinkchatsConfig {
     #[serde(default)]
     pub extra_arguments: Vec<String>,
     #[serde(default)]
     pub extra_env_vars: Vec<String>,
-    pub download_attempts: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LauncherConfig {
     #[serde(default)]
-    pub skip_update: bool,
-    #[serde(default)]
     pub check_update: bool,
     #[serde(default)]
-    pub keyring: Option<PathBuf>,
-    #[serde(default)]
-    force_update: bool,
+    pub check_update_interval: usize,
+    pub download_attempts: Option<usize>,
 }
 
 #[cfg(test)]
@@ -108,8 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_spotify_config() -> Result<()> {
-        let cf = ConfigFile::parse("[spotify]")?;
+    fn test_empty_mts_linkchats_config() -> Result<()> {
+        let cf = ConfigFile::parse("[mts-linkchats]")?;
         assert_eq!(cf, ConfigFile::default());
         Ok(())
     }
@@ -122,143 +127,28 @@ mod tests {
     }
 
     #[test]
-    fn test_launcher_config_skip_update() -> Result<()> {
+    fn test_check_update_and_check_update_interval_confg() -> Result<()> {
         let cf = ConfigFile::parse(
-            r#"[launcher]
-skip_update = true
+            r#"
+[launcher]
+check_update = false
+check_update_interval = 0
         "#,
-        );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: true,
-                    check_update: false,
-                    force_update: false,
-                    keyring: None,
-                }
-            }
-        );
-
+        )?;
+        assert!(!cf.launcher.check_update);
+        assert_eq!(cf.launcher.check_update_interval, 0);
         Ok(())
     }
 
     #[test]
-    fn test_launcher_config_skip_update_check_update() -> Result<()> {
+    fn test_check_update_interval_negative_config() -> Result<()> {
         let cf = ConfigFile::parse(
-            r#"[launcher]
-skip_update = true
-check_update = true
+            r#"
+[launcher]
+check_update_interval = -1
         "#,
         );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: true,
-                    check_update: false,
-                    force_update: false,
-                    keyring: None,
-                }
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_launcher_config_skip_update_force_update() -> Result<()> {
-        let cf = ConfigFile::parse(
-            r#"[launcher]
-skip_update = true
-force_update = true
-        "#,
-        );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: false,
-                    check_update: true,
-                    force_update: true,
-                    keyring: None,
-                }
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_launcher_config_check_update_force_update_skip_update() -> Result<()> {
-        let cf = ConfigFile::parse(
-            r#"[launcher]
-skip_update = true
-force_update = true
-        "#,
-        );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: false,
-                    check_update: true,
-                    force_update: true,
-                    keyring: None,
-                }
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_launcher_config_keyring() -> Result<()> {
-        let cf = ConfigFile::parse(
-            r#"[launcher]
-keyring = "/dev/null"
-        "#,
-        );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: false,
-                    check_update: true,
-                    force_update: false,
-                    keyring: Some(PathBuf::from("/dev/null")),
-                }
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_launcher_config_keyring_empty_string() -> Result<()> {
-        let cf = ConfigFile::parse(
-            r#"[launcher]
-keyring = ""
-        "#,
-        );
-        assert_eq!(
-            cf.unwrap_or_default(),
-            ConfigFile {
-                spotify: SpotifyConfig::default(),
-                launcher: LauncherConfig {
-                    skip_update: false,
-                    check_update: true,
-                    force_update: false,
-                    keyring: None,
-                }
-            }
-        );
-
+        assert!(cf.is_err());
         Ok(())
     }
 }

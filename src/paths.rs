@@ -11,7 +11,9 @@ pub struct Paths {
 
 impl Paths {
     pub fn new() -> Result<Self> {
-        let data_dir = dirs::data_dir().context("Failed to detect data directory")?;
+        let data_dir = dirs::data_dir()
+            .context("Failed to detect data directory")?
+            .join("mts-linkchats-launcher");
         let cache_dir = dirs::cache_dir().context("Failed to detect cache directory")?;
 
         Ok(Self {

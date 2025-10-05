@@ -51,7 +51,7 @@ impl ConfigFile {
             .into_iter()
             .flatten()
         {
-            let path = path.join("mts-linkchats.conf");
+            let path = path.join("mts-linkchats-launcher.conf");
             debug!("Searching for configuration file at {:?}", path);
             if path.exists() {
                 debug!("Found configuration file at {:?}", path);

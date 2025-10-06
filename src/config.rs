@@ -64,8 +64,8 @@ impl Config {
                 .download_attempts
                 .or(cf.launcher.download_attempts)
                 .unwrap_or(5),
-            check_update: if args.check_update {
-                args.check_update
+            check_update: if args.skip_check_update {
+                false
             } else {
                 cf.launcher.check_update
             },
@@ -86,7 +86,7 @@ mod tests {
 
     fn get_default_args() -> Args {
         Args {
-            check_update: false,
+            skip_check_update: true,
             timeout: None,
             tar: None,
             install_dir: None,
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn check_overrided_args_over_config_file() -> Result<()> {
         let args = Args {
-            check_update: true,
+            skip_check_update: true,
             install_dir: Some(dirs::data_dir().unwrap().join(".test")),
             download_attempts: Some(1),
             tar: Some(dirs::cache_dir().unwrap().join(".test.tar.gz")),
@@ -119,7 +119,7 @@ download_attempts = 2
         assert!(!cf.launcher.check_update);
         assert_eq!(cf.launcher.download_attempts, Some(2));
 
-        assert_eq!(config.check_update, args.check_update);
+        assert!(!config.check_update);
         assert_eq!(config.download_attempts, args.download_attempts.unwrap());
         assert_eq!(config.install_path, *args.install_dir.as_ref().unwrap());
         assert_eq!(config.new_intsall_path, *args.install_dir.as_ref().unwrap());

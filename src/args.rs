@@ -14,7 +14,7 @@ pub struct Args {
     pub verbose: u8,
     /// Should check update when starting
     #[arg(long)]
-    pub check_update: bool,
+    pub skip_check_update: bool,
     /// How often do you need to check for updates
     #[arg(long)]
     pub check_update_interval: Option<usize>,

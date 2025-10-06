@@ -1,10 +1,12 @@
 [Desktop Entry]
-Type=Application
 Name=MTS LinkChats (Launcher)
-Icon=mts-linkchats-launcher
-TryExec=mts-linkchats-launcher
 Exec=mts-linkchats-launcher %U
 Terminal=false
-MimeType=x-scheme-handler/wbnr;
-Categories=Office;VideoConference;
-StartupWMClass=mts-linkchats
+Type=Application
+Icon=mts-linkchats-launcher
+StartupWMClass=LinkChats
+Encoding=UTF-8
+StartupNotify=true
+Comment=LinkChats - corporate messenger
+MimeType=x-scheme-handler/mtslinkchats
+Categories=Office;Chat

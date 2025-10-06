@@ -84,15 +84,16 @@ async fn update(config: &Config, state: Option<&State>) -> Result<()> {
 }
 
 async fn start(args: &Args, config: &Config) -> Result<()> {
-    let bin = config.install_path.join("linkchats");
+    let bin = config.install_path.join("linkchats.bin");
 
-    let mut exec_args = vec![];
+    let exec_args = ["echo".into(), "--no-sandbox".into()]
+        // let exec_args = []
+        .iter()
+        .chain(config.extra_arguments.iter())
+        .cloned()
+        .collect::<Vec<_>>();
 
-    for arg in config.extra_arguments.iter().cloned() {
-        exec_args.push(arg);
-    }
-
-    debug!("Assembled command: {:?}", exec_args);
+    debug!("Assembled command: {} {:?}", bin.display(), exec_args);
 
     if args.no_exec {
         info!("Skipping exec because --no-exec was used");
@@ -100,12 +101,12 @@ async fn start(args: &Args, config: &Config) -> Result<()> {
         let mut child = Command::new(bin)
             .args(exec_args)
             .spawn()
-            .with_context(|| anyhow!("Failed spawn `linkchats`"))?;
+            .with_context(|| anyhow!("Failed spawn `linkchats.bin`"))?;
 
         let status_code = child
             .wait()
             .await
-            .with_context(|| anyhow!("Failed wait `linkchats`"))?;
+            .with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;
         debug!("`linkchats` is exited with code {status_code:?}");
     }
 

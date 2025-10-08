@@ -98,6 +98,26 @@ async fn start(args: &Args, config: &Config) -> Result<()> {
     if args.no_exec {
         info!("Skipping exec because --no-exec was used");
     } else {
+        let stub_desktop_file_path = dirs::data_local_dir()
+            .unwrap()
+            .join("applications/linkchats.desktop");
+
+        if fs::metadata(&stub_desktop_file_path).await.is_err() {
+            fs::write(&stub_desktop_file_path, &[])
+                .await
+                .with_context(|| anyhow!("Failed create stub desktop file"))?;
+
+            let mut stub_desktop_file_permissions = fs::metadata(&stub_desktop_file_path)
+                .await
+                .with_context(|| anyhow!("Failed get metadata opened stub desktop file"))?
+                .permissions();
+            stub_desktop_file_permissions.set_readonly(true);
+
+            fs::set_permissions(&stub_desktop_file_path, stub_desktop_file_permissions)
+                .await
+                .with_context(|| anyhow!("Failed set permissions in stub desktop file"))?;
+        }
+
         let mut child = Command::new(bin)
             .args(exec_args)
             .spawn()
@@ -107,7 +127,8 @@ async fn start(args: &Args, config: &Config) -> Result<()> {
             .wait()
             .await
             .with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;
-        debug!("`linkchats` is exited with code {status_code:?}");
+
+        debug!("`linkchats.bin` is exited with code {status_code:?}");
     }
 
     Ok(())

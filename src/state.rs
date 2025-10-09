@@ -1,6 +1,9 @@
 use crate::errors::*;
 use serde::{Deserialize, Serialize};
-use std::{path::Path, time::SystemTime};
+use std::{
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 use tokio::fs;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -10,8 +13,20 @@ pub struct State {
     pub pid: Option<u32>,
 }
 
-impl State {
-    pub async fn load(path: &Path) -> Result<Option<Self>> {
+pub struct StateFile {
+    path: PathBuf,
+    pub state: Option<State>,
+}
+
+impl StateFile {
+    pub fn new(state: State, path: &Path) -> Self {
+        Self {
+            state: Some(state),
+            path: path.to_path_buf(),
+        }
+    }
+
+    pub async fn load(path: &Path) -> Result<Self> {
         if fs::metadata(path).await.is_ok() {
             debug!("Reading state file from {:?}...", path);
             let buf = fs::read(path).await.with_context(|| {
@@ -22,20 +37,31 @@ impl State {
             })?;
             let state = toml::from_slice::<State>(&buf);
             debug!("Loaded state: {:?}", state);
-            Ok(state.ok())
+            Ok(Self {
+                path: path.to_path_buf(),
+                state: state.ok(),
+            })
         } else {
             debug!("State file at {:?} does not exist, using empty state", path);
-            Ok(None)
+            Ok(Self {
+                path: path.to_path_buf(),
+                state: None,
+            })
         }
     }
 
-    pub async fn write_pid(&mut self, pid: Option<u32>, state_path: &Path) -> Result<()> {
-        self.pid = pid;
-        debug!("Updating state pid");
+    pub async fn save(&self) -> Result<()> {
+        debug!("Save state in file");
 
-        let buf = toml::to_string(&self)?;
-        fs::write(state_path, buf)
-            .await
-            .context("Failed to write state file")
+        if let Some(state) = &self.state {
+            let buf = toml::to_string(state)?;
+            fs::write(&self.path, buf)
+                .await
+                .context("Failed to write state file")?;
+        } else {
+            debug!("State is empty. Skipping...");
+        }
+
+        Ok(())
     }
 }

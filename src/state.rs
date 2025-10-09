@@ -7,6 +7,7 @@ use tokio::fs;
 pub struct State {
     pub version: String,
     pub last_update_check: SystemTime,
+    pub pid: Option<u32>,
 }
 
 impl State {
@@ -26,5 +27,15 @@ impl State {
             debug!("State file at {:?} does not exist, using empty state", path);
             Ok(None)
         }
+    }
+
+    pub async fn write_pid(&mut self, pid: Option<u32>, state_path: &Path) -> Result<()> {
+        self.pid = pid;
+        debug!("Updating state pid");
+
+        let buf = toml::to_string(&self)?;
+        fs::write(state_path, buf)
+            .await
+            .context("Failed to write state file")
     }
 }

@@ -28,6 +28,7 @@ tokio = { version = "1", features = [
   "rt-multi-thread",
   "process",
   "fs",
+  "signal",
 ] }
 toml = "0.9"
 xch = "1.1"

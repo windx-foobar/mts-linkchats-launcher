@@ -6,19 +6,36 @@ use mts_linkchats_launcher::config::Config;
 use mts_linkchats_launcher::errors::*;
 use mts_linkchats_launcher::extract;
 use mts_linkchats_launcher::pkg;
-use mts_linkchats_launcher::state::State;
+use mts_linkchats_launcher::state::{State, StateFile};
 use mts_linkchats_launcher::ui;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::signal;
 
-async fn should_update(config: &Config, state: Option<&State>) -> Result<bool> {
+async fn graceful_shutdown(state_file: &mut StateFile) -> Result<()> {
+    debug!("Graceful shutdown");
+
+    if let Some(state) = &mut state_file.state {
+        debug!("Cleanup state");
+        state.pid = None;
+        state_file.save().await?;
+    }
+
+    Ok(())
+}
+
+async fn should_update(config: &Config, state: &Option<State>) -> Result<bool> {
     if config.force_check_update {
         Ok(true)
     } else if !config.check_update {
         Ok(false)
-    } else if let Some(state) = &state {
+    } else if let Some(state) = state {
+        if state.pid.is_some() {
+            return Ok(false);
+        }
+
         let Ok(since_update) = SystemTime::now().duration_since(state.last_update_check) else {
             // if the last update time is somehow in the future, check for updates now
             return Ok(true);
@@ -43,7 +60,7 @@ fn print_tar_url() {
     println!("{}", pkg::DOWNLOAD_URL);
 }
 
-async fn update(config: &Config, state: Option<&State>) -> Result<()> {
+async fn update(config: &Config, state_file: &mut StateFile) -> Result<()> {
     let tar = if let Some(tar_path) = &config.tar_path {
         fs::read(tar_path)
             .await
@@ -55,8 +72,11 @@ async fn update(config: &Config, state: Option<&State>) -> Result<()> {
     };
 
     let version = pkg::parse_version(tar.as_slice())?;
-    match state {
+    match &mut state_file.state {
         Some(state) if state.version == version => {
+            state.last_update_check = SystemTime::now();
+            state.version = version.clone();
+
             if config.force_check_update {
                 info!(
                     "Latest version is already installed, but --tar options is passed. Force update..."
@@ -71,23 +91,15 @@ async fn update(config: &Config, state: Option<&State>) -> Result<()> {
         }
     }
 
-    debug!("Updating state file");
-    let buf = toml::to_string(&State {
-        last_update_check: SystemTime::now(),
-        version,
-    })?;
-    fs::write(&config.state_path, buf)
-        .await
-        .context("Failed to write state file")?;
+    state_file.save().await?;
 
     Ok(())
 }
 
-async fn start(args: &Args, config: &Config) -> Result<()> {
+async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Result<()> {
     let bin = config.install_path.join("linkchats.bin");
 
     let exec_args = ["echo".into(), "--no-sandbox".into()]
-        // let exec_args = []
         .iter()
         .chain(config.extra_arguments.iter())
         .cloned()
@@ -101,6 +113,8 @@ async fn start(args: &Args, config: &Config) -> Result<()> {
         let stub_desktop_file_path = dirs::data_local_dir()
             .unwrap()
             .join("applications/linkchats.desktop");
+        let mut command = Command::new(bin);
+        let command = command.args(exec_args);
 
         if fs::metadata(&stub_desktop_file_path).await.is_err() {
             fs::write(&stub_desktop_file_path, &[])
@@ -118,17 +132,42 @@ async fn start(args: &Args, config: &Config) -> Result<()> {
                 .with_context(|| anyhow!("Failed set permissions in stub desktop file"))?;
         }
 
-        let mut child = Command::new(bin)
-            .args(exec_args)
-            .spawn()
-            .with_context(|| anyhow!("Failed spawn `linkchats.bin`"))?;
+        match &state_file.state {
+            Some(state) if state.pid.is_some() => {
+                debug!("`linkchats.bin` already running, rerun without spawn");
 
-        let status_code = child
-            .wait()
-            .await
-            .with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;
+                command
+                    .output()
+                    .await
+                    .with_context(|| anyhow!("Failed output `linkchats.bin`"))?;
+            }
+            _ => {
+                let mut child = command
+                    .spawn()
+                    .with_context(|| anyhow!("Failed spawn `linkchats.bin`"))?;
+                let pid = child.id();
 
-        debug!("`linkchats.bin` is exited with code {status_code:?}");
+                let child_wait = child.wait();
+
+                if let Some(state) = &mut state_file.state {
+                    state.pid = pid;
+                    state_file.save().await?;
+                }
+
+                tokio::select! {
+                    _ = signal::ctrl_c() => {
+                        debug!("Exited by CTRL+C");
+                        graceful_shutdown(state_file).await?;
+                    },
+                    value = child_wait => {
+                        graceful_shutdown(state_file).await?;
+
+                        let status_code = value.with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;
+                        debug!("`linkchats.bin` is exited with code {status_code:?}");
+                    }
+                };
+            }
+        }
     }
 
     Ok(())
@@ -153,18 +192,17 @@ async fn main() -> Result<()> {
     if args.print_tar_url {
         print_tar_url();
     } else {
-        let state = State::load(&config.state_path).await?;
-        let state = state.as_ref();
+        let mut state_file = StateFile::load(&config.state_path).await?;
 
-        if should_update(&config, state).await? {
-            if let Err(err) = update(&config, state).await {
+        if should_update(&config, &state_file.state).await? {
+            if let Err(err) = update(&config, &mut state_file).await {
                 error!("Update failed: {err:#}");
                 ui::error(&err).await?;
             }
         } else {
             info!("No update needed");
         }
-        start(&args, &config).await?;
+        start(&args, &config, &mut state_file).await?;
     }
 
     Ok(())

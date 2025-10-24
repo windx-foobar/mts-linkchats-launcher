@@ -142,24 +142,30 @@ async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Resu
                     .with_context(|| anyhow!("Failed output `linkchats.bin`"))?;
             }
             _ => {
+                use signal::unix::{SignalKind, signal};
+
                 let mut child = command
                     .spawn()
                     .with_context(|| anyhow!("Failed spawn `linkchats.bin`"))?;
                 let pid = child.id();
-
-                let child_wait = child.wait();
 
                 if let Some(state) = &mut state_file.state {
                     state.pid = pid;
                     state_file.save().await?;
                 }
 
+                let mut sigterm = signal(SignalKind::terminate())?;
+
                 tokio::select! {
                     _ = signal::ctrl_c() => {
                         debug!("Exited by CTRL+C");
                         graceful_shutdown(state_file).await?;
                     },
-                    value = child_wait => {
+                    _ = sigterm.recv() => {
+                        debug!("Exited by SIGTERM");
+                        graceful_shutdown(state_file).await?;
+                    }
+                    value = child.wait() => {
                         graceful_shutdown(state_file).await?;
 
                         let status_code = value.with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, clap::Parser)]
 #[command(version)]
 pub struct Args {
-    /// Use a local .deb file instead of downloading one
+    /// Use a local .tar file instead of downloading one
     #[arg(long)]
     pub tar: Option<PathBuf>,
     /// Install into specific directory
@@ -12,7 +12,7 @@ pub struct Args {
     /// Verbose logs (can be used multiple times)
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
-    /// Should check update when starting
+    /// Skip check update when starting
     #[arg(long)]
     pub skip_check_update: bool,
     /// How often do you need to check for updates

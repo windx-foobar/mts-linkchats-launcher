@@ -97,7 +97,7 @@ async fn update(config: &Config, state_file: &mut StateFile) -> Result<()> {
 }
 
 async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Result<()> {
-    let bin = config.install_path.join("linkchats.bin");
+    let bin = config.install_path.join("mtslink.bin");
 
     let exec_args = ["echo".into(), "--no-sandbox".into()]
         .iter()

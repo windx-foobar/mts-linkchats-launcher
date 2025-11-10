@@ -73,11 +73,14 @@ async fn update(config: &Config, state_file: &mut StateFile) -> Result<()> {
 
     let version = pkg::parse_version(tar.as_slice())?;
     match &mut state_file.state {
-        Some(state) if state.version == version => {
+        Some(state) => {
             state.last_update_check = SystemTime::now();
-            state.version = version.clone();
 
-            if config.force_check_update {
+            if state.version != version {
+                info!("Version not compared. Updating...");
+                state.version = version;
+                extract::pkg(tar.as_slice(), config).await?;
+            } else if config.force_check_update {
                 info!(
                     "Latest version is already installed, but --tar options is passed. Force update..."
                 );

@@ -115,7 +115,7 @@ async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Resu
     } else {
         let stub_desktop_file_path = dirs::data_local_dir()
             .unwrap()
-            .join("applications/linkchats.desktop");
+            .join("applications/mtslink.desktop");
         let mut command = Command::new(bin);
         let command = command.args(exec_args);
 

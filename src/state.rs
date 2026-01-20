@@ -13,6 +13,16 @@ pub struct State {
     pub pid: Option<u32>,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            version: Default::default(),
+            last_update_check: SystemTime::UNIX_EPOCH,
+            pid: None,
+        }
+    }
+}
+
 pub struct StateFile {
     path: PathBuf,
     pub state: Option<State>,
@@ -42,11 +52,15 @@ impl StateFile {
                 state: state.ok(),
             })
         } else {
-            debug!("State file at {:?} does not exist, using empty state", path);
-            Ok(Self {
-                path: path.to_path_buf(),
-                state: None,
-            })
+            debug!(
+                "State file at {:?} does not exist, create state file and fill default data",
+                path
+            );
+
+            let state_file = Self::new(State::default(), path);
+            state_file.save().await?;
+
+            Ok(state_file)
         }
     }
 

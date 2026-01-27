@@ -1,16 +1,17 @@
-use crate::errors::*;
+use crate::{config::BIN_APP_NAME, errors::*};
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     time::SystemTime,
 };
+use sysinfo::{Pid, System};
 use tokio::fs;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub version: String,
     pub last_update_check: SystemTime,
-    pub pid: Option<u32>,
 }
 
 impl Default for State {
@@ -18,20 +19,29 @@ impl Default for State {
         Self {
             version: Default::default(),
             last_update_check: SystemTime::UNIX_EPOCH,
-            pid: None,
         }
+    }
+}
+
+impl State {
+    pub fn get_pid(&self) -> Option<Pid> {
+        let sys = System::new_all();
+
+        sys.processes_by_name(OsStr::new(BIN_APP_NAME))
+            .next()
+            .map(|process| process.pid())
     }
 }
 
 pub struct StateFile {
     path: PathBuf,
-    pub state: Option<State>,
+    pub state: State,
 }
 
 impl StateFile {
     pub fn new(state: State, path: &Path) -> Self {
         Self {
-            state: Some(state),
+            state,
             path: path.to_path_buf(),
         }
     }
@@ -45,11 +55,11 @@ impl StateFile {
                     path
                 )
             })?;
-            let state = toml::from_slice::<State>(&buf);
+            let state = toml::from_slice::<State>(&buf)?;
             debug!("Loaded state: {:?}", state);
             Ok(Self {
                 path: path.to_path_buf(),
-                state: state.ok(),
+                state,
             })
         } else {
             debug!(
@@ -67,14 +77,10 @@ impl StateFile {
     pub async fn save(&self) -> Result<()> {
         debug!("Save state in file");
 
-        if let Some(state) = &self.state {
-            let buf = toml::to_string(state)?;
-            fs::write(&self.path, buf)
-                .await
-                .context("Failed to write state file")?;
-        } else {
-            debug!("State is empty. Skipping...");
-        }
+        let buf = toml::to_string(&self.state)?;
+        fs::write(&self.path, buf)
+            .await
+            .context("Failed to write state file")?;
 
         Ok(())
     }

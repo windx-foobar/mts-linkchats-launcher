@@ -1,38 +1,24 @@
 use clap::Parser;
 use env_logger::Env;
-use mts_linkchats_launcher::apt::Client;
-use mts_linkchats_launcher::args::Args;
-use mts_linkchats_launcher::config::Config;
-use mts_linkchats_launcher::errors::*;
-use mts_linkchats_launcher::extract;
-use mts_linkchats_launcher::pkg;
-use mts_linkchats_launcher::state::{State, StateFile};
-use mts_linkchats_launcher::ui;
-use std::time::Duration;
-use std::time::SystemTime;
-use tokio::fs;
-use tokio::process::Command;
-use tokio::signal;
+use mts_linkchats_launcher::{
+    apt::Client,
+    args::Args,
+    config::{BIN_APP_NAME, Config},
+    errors::*,
+    extract, pkg,
+    state::{State, StateFile},
+    ui,
+};
+use std::time::{Duration, SystemTime};
+use tokio::{fs, process::Command, signal};
 
-async fn graceful_shutdown(state_file: &mut StateFile) -> Result<()> {
-    debug!("Graceful shutdown");
-
-    if let Some(state) = &mut state_file.state {
-        debug!("Cleanup state");
-        state.pid = None;
-        state_file.save().await?;
-    }
-
-    Ok(())
-}
-
-async fn should_update(config: &Config, state: &Option<State>) -> Result<bool> {
+async fn should_update(config: &Config, state: &State) -> Result<bool> {
     if config.force_check_update {
         Ok(true)
     } else if !config.check_update {
         Ok(false)
-    } else if let Some(state) = state {
-        if state.pid.is_some() {
+    } else {
+        if state.get_pid().is_some() {
             return Ok(false);
         }
 
@@ -51,8 +37,6 @@ async fn should_update(config: &Config, state: &Option<State>) -> Result<bool> {
         );
         let interval: u64 = config.check_update_interval.try_into()?;
         Ok(since_update >= Duration::from_secs(interval))
-    } else {
-        Ok(true)
     }
 }
 
@@ -72,35 +56,25 @@ async fn update(config: &Config, state_file: &mut StateFile) -> Result<()> {
     };
 
     let version = pkg::parse_version(tar.as_slice())?;
-    match &mut state_file.state {
-        Some(state) => {
-            state.last_update_check = SystemTime::now();
+    let state = &mut state_file.state;
 
-            if state.version != version {
-                info!("Version not compared. Updating...");
-                state.version = version;
-                extract::pkg(tar.as_slice(), config).await?;
-            } else if config.force_check_update {
-                info!(
-                    "Latest version is already installed, but --tar options is passed. Force update..."
-                );
-                extract::pkg(tar.as_slice(), config).await?;
-            } else {
-                info!("Latest version is already installed, skip...");
-            }
-        }
-        _ => {
-            extract::pkg(tar.as_slice(), config).await?;
-        }
+    if state.version != version {
+        info!("Version not compared. Updating...");
+        state.version = version;
+        extract::pkg(tar.as_slice(), config).await?;
+    } else if config.force_check_update {
+        info!("Latest version is already installed, but --tar options is passed. Force update...");
+        extract::pkg(tar.as_slice(), config).await?;
+    } else {
+        info!("Latest version is already installed, skip...");
     }
-
     state_file.save().await?;
 
     Ok(())
 }
 
 async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Result<()> {
-    let bin = config.install_path.join("mtslink.bin");
+    let bin = config.install_path.join(BIN_APP_NAME);
 
     let exec_args = ["echo".into(), "--no-sandbox".into()]
         .iter()
@@ -135,47 +109,34 @@ async fn start(args: &Args, config: &Config, state_file: &mut StateFile) -> Resu
                 .with_context(|| anyhow!("Failed set permissions in stub desktop file"))?;
         }
 
-        match &state_file.state {
-            Some(state) if state.pid.is_some() => {
-                debug!("`linkchats.bin` already running, rerun without spawn");
+        if state_file.state.get_pid().is_some() {
+            debug!("`{}` already running, rerun without spawn", BIN_APP_NAME);
 
-                command
-                    .output()
-                    .await
-                    .with_context(|| anyhow!("Failed output `linkchats.bin`"))?;
-            }
-            _ => {
-                use signal::unix::{SignalKind, signal};
+            command
+                .output()
+                .await
+                .with_context(|| anyhow!("Failed output `{}`", BIN_APP_NAME))?;
+        } else {
+            use signal::unix::{SignalKind, signal};
 
-                let mut child = command
-                    .spawn()
-                    .with_context(|| anyhow!("Failed spawn `linkchats.bin`"))?;
-                let pid = child.id();
+            let mut child = command
+                .spawn()
+                .with_context(|| anyhow!("Failed spawn `{}`", BIN_APP_NAME))?;
 
-                if let Some(state) = &mut state_file.state {
-                    state.pid = pid;
-                    state_file.save().await?;
+            let mut sigterm = signal(SignalKind::terminate())?;
+
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    debug!("Exited by CTRL+C");
+                },
+                _ = sigterm.recv() => {
+                    debug!("Exited by SIGTERM");
                 }
-
-                let mut sigterm = signal(SignalKind::terminate())?;
-
-                tokio::select! {
-                    _ = signal::ctrl_c() => {
-                        debug!("Exited by CTRL+C");
-                        graceful_shutdown(state_file).await?;
-                    },
-                    _ = sigterm.recv() => {
-                        debug!("Exited by SIGTERM");
-                        graceful_shutdown(state_file).await?;
-                    }
-                    value = child.wait() => {
-                        graceful_shutdown(state_file).await?;
-
-                        let status_code = value.with_context(|| anyhow!("Failed wait `linkchats.bin`"))?;
-                        debug!("`linkchats.bin` is exited with code {status_code:?}");
-                    }
-                };
-            }
+                value = child.wait() => {
+                    let status_code = value.with_context(|| anyhow!("Failed wait `{}`", BIN_APP_NAME))?;
+                    debug!("`{}` is exited with code {status_code:?}", BIN_APP_NAME);
+                }
+            };
         }
     }
 

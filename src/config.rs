@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 mod file;
 
+pub const BIN_APP_NAME: &str = "mtslink.bin";
+
 #[derive(Debug)]
 pub struct Config {
     pub install_path: PathBuf,

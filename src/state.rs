@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    sync::LazyLock,
     time::SystemTime,
 };
 use sysinfo::{Pid, System};
@@ -12,6 +13,8 @@ use tokio::fs;
 pub struct State {
     pub version: String,
     pub last_update_check: SystemTime,
+    #[serde(skip)]
+    pid: LazyLock<Option<Pid>>,
 }
 
 impl Default for State {
@@ -19,17 +22,21 @@ impl Default for State {
         Self {
             version: Default::default(),
             last_update_check: SystemTime::UNIX_EPOCH,
+            pid: LazyLock::new(|| {
+                let sys = System::new_all();
+
+                sys.processes_by_name(OsStr::new(BIN_APP_NAME))
+                    .next()
+                    .map(|process| process.pid())
+            }),
         }
     }
 }
 
 impl State {
     pub fn get_pid(&self) -> Option<Pid> {
-        let sys = System::new_all();
-
-        sys.processes_by_name(OsStr::new(BIN_APP_NAME))
-            .next()
-            .map(|process| process.pid())
+        dbg!(&self.pid);
+        *self.pid
     }
 }
 

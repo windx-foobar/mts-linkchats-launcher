@@ -58,6 +58,7 @@ async fn update(config: &Config, state_file: &mut StateFile) -> Result<()> {
     let version = pkg::parse_version(tar.as_slice())?;
     let state = &mut state_file.state;
 
+    state.last_update_check = SystemTime::now();
     if state.version != version {
         info!("Version not compared. Updating...");
         state.version = version;

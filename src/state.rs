@@ -35,7 +35,6 @@ impl Default for State {
 
 impl State {
     pub fn get_pid(&self) -> Option<Pid> {
-        dbg!(&self.pid);
         *self.pid
     }
 }
